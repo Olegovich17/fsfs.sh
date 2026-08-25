@@ -155,7 +155,13 @@ fi
 FOUND_COUNT=0
 
 while IFS= read -r -d '' cue_file; do
-    if [[ "$cue_file" =~ /"${OUT_DIR_NAME}"/ ]]; then continue; fi
+    if [[ "$cue_file" =~ [Ww][Aa][Vv]\.cue$ ]]; then
+        dir_path=$(dirname "$cue_file")
+        base_cue=$(basename "$cue_file" | sed -E 's/[Ww][Aa][Vv]/flac/g')
+        if [ -f "$dir_path/$base_cue" ]; then
+            continue
+        fi
+    fi
 
     dir=$(dirname "$cue_file")
     cue_name=$(basename "$cue_file")
@@ -166,13 +172,25 @@ while IFS= read -r -d '' cue_file; do
 
     audio_file=""
 
-    candidate_1="${cue_name%.*}"
-    if [ -f "$dir/$candidate_1" ] && [[ "$candidate_1" =~ \.(flac|FLAC)$ ]]; then
-        audio_file="$dir/$candidate_1"
+    cue_target=$(extract_cue_tag "FILE" "$tmp_raw_pre" | awk '{print $1}')
+    if [ -n "$cue_target" ]; then
+        if [ -f "$dir/$cue_target" ]; then
+            audio_file="$dir/$cue_target"
+        else
+            base_target="${cue_target%.*}"
+            for ext in flac FLAC Flac; do
+                if [ -f "$dir/${base_target}.${ext}" ]; then
+                    audio_file="$dir/${base_target}.${ext}"
+                    break
+                fi
+            done
+        fi
     fi
 
     if [ -z "$audio_file" ]; then
-        base_no_ext="${cue_name%.*}"
+        base_no_ext="${cue_name%.cue}"
+        base_no_ext="${base_no_ext%.flac}"
+        base_no_ext="${base_no_ext%.wav}"
         for ext in flac FLAC Flac; do
             if [ -f "$dir/${base_no_ext}.${ext}" ]; then
                 audio_file="$dir/${base_no_ext}.${ext}"
@@ -181,10 +199,12 @@ while IFS= read -r -d '' cue_file; do
         done
     fi
 
-    if [ -z "$audio_file" ]; then
-        cue_target=$(extract_cue_tag "FILE" "$tmp_raw_pre" | awk '{print $1}')
-        if [ -n "$cue_target" ] && [ -f "$dir/$cue_target" ] && [[ "$cue_target" =~ \.(flac|FLAC)$ ]]; then
-            audio_file="$dir/$cue_target"
+if [ -z "$audio_file" ]; then
+        shopt -s nullglob
+        local_flacs=("$dir"/*.flac "$dir"/*.FLAC)
+        shopt -u nullglob
+        if [ "${#local_flacs[@]}" -eq 1 ] && [ -f "${local_flacs[0]}" ]; then
+            audio_file="${local_flacs[0]}"
         fi
     fi
 
@@ -230,11 +250,13 @@ while IFS= read -r -d '' cue_file; do
         tr -d '\r' < "$tmp_raw" | sed '1s/^\xEF\xBB\xBF//' | sed 's/[“”«»]/"/g' > "$tmp_clean"
         grep -i -E '^[[:space:]]*(FILE|TRACK|INDEX|TITLE|PERFORMER|SONGWRITER|COMPOSER|FLAGS|REM DATE|REM YEAR|REM GENRE)' "$tmp_clean" > "$tmp_work"
 
-        awk -v fn="$flac_name" '
-            /^[[:space:]]*FILE/ { print "FILE \"" fn "\" WAVE"; next }
+         export A_FLAC_NAME="$flac_name"
+        awk '
+            /^[[:space:]]*FILE/ { print "FILE \"" ENVIRON["A_FLAC_NAME"] "\" WAVE"; next }
             { print }
         ' "$tmp_work" > "$tmp_work.tmp" && mv "$tmp_work.tmp" "$tmp_work"
-
+        unset A_FLAC_NAME
+        
         if ! grep -q -i "^FILE" "$tmp_work"; then
             sed -i '1i FILE "'"$flac_name"'" WAVE' "$tmp_work"
         fi
